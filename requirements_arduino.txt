@@ -1,0 +1,4 @@
+<Servo.h>
+"Adafruit_HX711.h"
+
+À chercher dans les librairies Arduino
