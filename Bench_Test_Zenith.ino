@@ -1,32 +1,52 @@
 #include <Servo.h>
 #include "Adafruit_HX711.h"
 
+int SweepCounter;
+
 const uint8_t DATA_PIN = 52;  
 const uint8_t CLOCK_PIN = 53; 
 
 Servo ESC; 
 Adafruit_HX711 hx711(DATA_PIN, CLOCK_PIN);
 
+float loop_begin_time;
+
 const int BUTTON_PIN_1 = 8;
 const int BUTTON_PIN_2 = 9;
 const int BUTTON_PIN_3 = 10;
+double calibration_factor;
 
-bool safety = LOW;
+float weightA128;
+
+int PotValue;
+
+float percent;
+float pwm;
+
+int increment = 5;
+
+bool activated = LOW;
+bool activable = HIGH;
+
+bool armed = LOW;
 
 const int ESC_PIN = 13; 
 
-int lastState_1;             // will be set in setup()
-int lastState_2;             // will be set in setup()
-int lastState_3; 
             // will be set in setup()
 
 const int LedPin = 3;    // you need the “=” between the name and the value
 const int LedPin2 = 2;
 
-int ledState1 = LOW;   // default off
-int ledState2 = LOW;   // default off
+
+int ArmButtonPress = HIGH;
+int currentState_3 = HIGH;
+int currentState_2 = HIGH;
 
 const int PotPin = A1;
+
+bool SweepButtonPress = HIGH;
+bool SweepActivable = HIGH;
+bool SweepActivated = LOW;
 
 float floatMap(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
@@ -42,9 +62,9 @@ void setup() {
   pinMode(BUTTON_PIN_2, INPUT_PULLUP);
   pinMode(BUTTON_PIN_3, INPUT_PULLUP);
 
-  lastState_1 = digitalRead(BUTTON_PIN_1); 
-  lastState_2 = digitalRead(BUTTON_PIN_2); 
-  lastState_3 = digitalRead(BUTTON_PIN_3); 
+  ArmButtonPress = digitalRead(BUTTON_PIN_1);
+  currentState_3 = digitalRead(BUTTON_PIN_3);
+  currentState_2 = digitalRead(BUTTON_PIN_2);
 
   hx711.begin();
 
@@ -61,17 +81,108 @@ void setup() {
 }
 
 void loop() {
-  int analogValue = analogRead(PotPin);
-  float percent = floatMap(analogValue, 0, 1023, 100, 0);
-  float pwm = floatMap(analogValue, 0, 1023, 2000, 1000);
-  float weightA128 = hx711.readChannelBlocking(CHAN_A_GAIN_128);
-  double calibration_factor = -1.0/47378.0;
+  loop_begin_time = millis();
 
-  int currentState_1 = digitalRead(BUTTON_PIN_1);
-  int currentState_3 = digitalRead(BUTTON_PIN_3);
-  int currentState_2 = digitalRead(BUTTON_PIN_2);
 
-  Serial.print(currentState_1);
+  DataRead();
+  ArmButtonHandler();
+  SweepButtonHandler();
+  Sweep();
+  ESC_command();
+  LED_output();
+  PrintData();
+
+  Enforce_max_loop_speed(2);
+}
+
+void Enforce_max_loop_speed(float MinDelay){
+  if (MinDelay > millis() - loop_begin_time ){
+    delay(1);
+  }
+  float loop_begin_time = millis();
+}
+
+void DataRead(){
+  PotValue = analogRead(PotPin);
+  percent = floatMap(PotValue, 0, 1023, 100, 0);
+  pwm = floatMap(PotValue, 0, 1023, 2000, 1000);
+  weightA128 = hx711.readChannelBlocking(CHAN_A_GAIN_128);
+  calibration_factor = -1.0/47378.0;
+
+  ArmButtonPress = digitalRead(BUTTON_PIN_1);
+  SweepButtonPress = digitalRead(BUTTON_PIN_3);
+  currentState_2 = digitalRead(BUTTON_PIN_2);
+}
+
+void LED_output(){
+  digitalWrite(LedPin, activated);
+  digitalWrite(LedPin2, SweepActivated);
+}
+
+
+void ESC_command(){
+  if (armed == HIGH){
+    ESC.write(pwm);
+  } else {
+    ESC.write(1000);
+  }
+}
+
+void SweepButtonHandler(){
+
+  if (SweepButtonPress == HIGH){
+    SweepActivable = HIGH;
+  }
+
+  if (SweepActivable == HIGH && SweepButtonPress == LOW){
+    SweepActivable = LOW;
+
+    if (SweepActivated == LOW && armed == HIGH){
+      SweepActivated = HIGH;
+      SweepCounter = 1050;
+    }
+  } 
+}
+
+void Sweep(){
+  if (SweepActivated) {
+      pwm = SweepCounter;
+      SweepCounter += increment;
+  }
+  if (SweepCounter > 1999){
+    increment = increment * -1;
+  } else if ((1040 > SweepCounter) && (SweepActivated)) {
+    SweepActivated = LOW;
+    pwm = 1000;
+    SweepActivable = HIGH;
+  }
+}
+
+void ArmButtonHandler(){
+
+  if (ArmButtonPress == HIGH){
+    activable = HIGH;
+  }
+
+  if (activable == HIGH && ArmButtonPress == LOW){
+    activable = LOW;
+
+    if (activated == HIGH){
+      activated = LOW;
+      armed = LOW;
+      SweepActivated = LOW;
+      pwm = 1000;
+    } else if (pwm < 1020) {
+      activated = HIGH;
+      armed = HIGH;
+    } else {
+      Serial.print("THROTTLE DOWN MOTHERFUCKER");
+    }
+  } 
+}
+
+void PrintData() {
+  Serial.print(ArmButtonPress);
   Serial.print(" , ");
 
   Serial.print(currentState_2);
@@ -88,36 +199,11 @@ void loop() {
   Serial.print(pwm);
   Serial.print(" , ");
 
-  digitalWrite(LedPin, ledState1);
-  digitalWrite(LedPin2, HIGH);
-
-  if (safety == HIGH){
-    ESC.write(pwm);
-  } else {
-    ESC.write(1000);
-  }
-
   Serial.print("Load cell raw  :");
-  Serial.print(weightA128);
+  Serial.println(weightA128);
 
   Serial.print(" , ");
 
   Serial.print("Force  :");
   Serial.println(weightA128*calibration_factor);
-
-  if (lastState_1 == HIGH && currentState_1 == LOW) {
-    if (ledState1 == LOW) {
-      ledState1 = HIGH;
-      safety = HIGH;
-      digitalWrite(LedPin, ledState1);
-      delay(150);
-    } else {
-      ledState1 = LOW;
-      safety = LOW;
-      digitalWrite(LedPin, ledState1);
-      delay(300);
-    }
-  }
-
-  delay(10);
 }
